@@ -12,7 +12,28 @@ from database import engine, get_db
 
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="SMAT Persistente")
+app = FastAPI(
+    title="SMAT - Sistema de Monitoreo de Alerta Temprana",
+    description="""
+    API robusta para la gestión y monitoreo de desastres naturales.
+    Permite la telemetría de sensores en tiempo real y el cálculo de niveles de riesgo.
+    **Entidades principales:**
+    * **Estaciones:** Puntos de monitoreo físico.
+    * **Lecturas:** Datos capturados por sensores.
+    * **Riesgos:** Análisis de criticidad basado en umbrales.
+    """,
+    version="1.0.0",
+    terms_of_service="http://unmsm.edu.pe/terms/",
+    contact={
+        "name": "Soporte Técnico SMAT - FISI",
+        "url": "http://fisi.unmsm.edu.pe",
+        "email": "desarrollo.smat@unmsm.edu.pe",
+    },
+    license_info={
+        "name": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
+    },
+)
 
 # Esquemas de validación (Pydantic)
 class EstacionCreate(BaseModel):
@@ -25,26 +46,59 @@ class LecturaCreate(BaseModel):
     valor: float
 
 # ENDPOINTS REFACTORIZADOS
-@app.post("/estaciones/", status_code=201)
-def crear_estacion(estacion: EstacionCreate, db: Session = Depends(get_db)):
+@app.post("/estaciones/",
+    status_code=201,
+    tags=["Gestión de Infraestructura"],
+    summary="Registrar una nueva estación de monitoreo",
+    description="Inserta una estación física (ej. río, volcán, zona sísmica) en la base de datos relacional."
+)
+def crear_estacion(estacion: schemas.EstacionCreate, db: Session = Depends(get_db)):
     # Convertimos el esquema de Pydantic a Modelo de SQLAlchemy
-    nueva_estacion = models.EstacionDB(id=estacion.id, nombre=estacion.nombre,
-ubicacion=estacion.ubicacion)
+    nueva_estacion = models.EstacionDB(id=estacion.id, nombre=estacion.nombre, ubicacion=estacion.ubicacion)
     db.add(nueva_estacion)
     db.commit()
     db.refresh(nueva_estacion)
     return {"msj": "Estación guardada en DB", "data": nueva_estacion}
 
-@app.post("/lecturas/", status_code=201)
-def registrar_lectura(lectura: LecturaCreate, db: Session = Depends(get_db)):
+@app.post("/lecturas/",
+    status_code=201,
+    tags=["Telemetría de Sensores"],
+    summary="Recibir datos de telemetría",
+    description="Recibe el valor capturado por un sensor y lo vincula a una estación existente mediante su ID."
+)
+def registrar_lectura(lectura: schemas.LecturaCreate, db: Session = Depends(get_db)):
     # Validar si la estación existe en la DB
-    estacion = db.query(models.EstacionDB).filter(models.EstacionDB.id ==
-lectura.estacion_id).first()
+    estacion = db.query(models.EstacionDB).filter(models.EstacionDB.id == lectura.estacion_id).first()
     if not estacion:
         raise HTTPException(status_code=404, detail="Estación no existe")
 
-    nueva_lectura = models.LecturaDB(valor=lectura.valor,
-estacion_id=lectura.estacion_id)
+    nueva_lectura = models.LecturaDB(valor=lectura.valor, estacion_id=lectura.estacion_id)
     db.add(nueva_lectura)
     db.commit()
     return {"status": "Lectura guardada en DB"}
+
+@app.get(
+    "/estaciones/{id}/riesgo",
+    tags=["Análisis de Riesgo"],
+    summary="Evaluar nivel de peligro actual",
+    description="Analiza la última lectura recibida de una estación y determina si el estado es NORMAL, ALERTA o PELIGRO."
+)
+def obtener_riesgo(id: int, db: Session = Depends(get_db)):
+    # 1. Validar existencia de la estación (Requisito 404)
+    estacion_existe = any(e.id == id for e in db_estaciones)
+    if not estacion_existe:
+        raise HTTPException(status_code=404, detail="Estación no encontrada")
+    # 2. Filtrar lecturas de la estación
+    lecturas = [l for l in db_lecturas if l.estacion_id == id]
+    if not lecturas:
+        return {"id": id, "nivel": "SIN DATOS", "valor": 0}
+    # 3. Evaluar última lectura (Motor de Reglas)
+    ultima_lectura = lecturas[-1].valor
+    if ultima_lectura > 20.0:
+        nivel = "PELIGRO"
+    elif ultima_lectura > 10.0:
+        nivel = "ALERTA"
+    else:
+        nivel = "NORMAL"
+
+    return {"id": id, "valor": ultima_lectura, "nivel": nivel}
