@@ -52,7 +52,7 @@ class LecturaCreate(BaseModel):
     summary="Registrar una nueva estación de monitoreo",
     description="Inserta una estación física (ej. río, volcán, zona sísmica) en la base de datos relacional."
 )
-def crear_estacion(estacion: schemas.EstacionCreate, db: Session = Depends(get_db)):
+def crear_estacion(estacion: EstacionCreate, db: Session = Depends(get_db)):
     # Convertimos el esquema de Pydantic a Modelo de SQLAlchemy
     nueva_estacion = models.EstacionDB(id=estacion.id, nombre=estacion.nombre, ubicacion=estacion.ubicacion)
     db.add(nueva_estacion)
@@ -66,7 +66,7 @@ def crear_estacion(estacion: schemas.EstacionCreate, db: Session = Depends(get_d
     summary="Recibir datos de telemetría",
     description="Recibe el valor capturado por un sensor y lo vincula a una estación existente mediante su ID."
 )
-def registrar_lectura(lectura: schemas.LecturaCreate, db: Session = Depends(get_db)):
+def registrar_lectura(lectura: LecturaCreate, db: Session = Depends(get_db)):
     # Validar si la estación existe en la DB
     estacion = db.query(models.EstacionDB).filter(models.EstacionDB.id == lectura.estacion_id).first()
     if not estacion:
@@ -102,3 +102,40 @@ def obtener_riesgo(id: int, db: Session = Depends(get_db)):
         nivel = "NORMAL"
 
     return {"id": id, "valor": ultima_lectura, "nivel": nivel}
+
+@app.get(
+    "/estaciones/stats",
+    tags=["Resumen Ejecutivo"],
+    summary="Resumen general del sistema SMAT",
+    description="""
+    Proporciona un resumen ejecutivo del sistema de monitoreo.
+
+    *Incluye:*
+    - Total de estaciones registradas.
+    - Total de lecturas almacenadas.
+    - Promedio global de todas las lecturas.
+
+    Este endpoint permite obtener una visión rápida del estado general
+    del sistema y su volumen de datos.
+    """,
+    responses={
+        404: {
+            "description": "No hay datos disponibles en el sistema"
+        }
+    }
+)
+def obtener_stats(db: Session = Depends(get_db)):
+    estaciones = db.query(models.EstacionDB).all()
+    lecturas = db.query(models.LecturaDB).all()
+
+    if not estaciones or not lecturas:
+        raise HTTPException(status_code=404, detail="No hay datos suficientes")
+
+    valores = [l.valor for l in lecturas]
+    promedio_global = sum(valores) / len(valores)
+
+    return {
+        "total_estaciones": len(estaciones),
+        "total_lecturas": len(lecturas),
+        "promedio_global": promedio_global
+    }
